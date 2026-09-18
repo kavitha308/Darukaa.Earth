@@ -38,6 +38,7 @@ vi.mock('@mapbox/mapbox-gl-draw', () => {
     default: vi.fn(() => ({
       changeMode: vi.fn(),
       deleteAll: vi.fn(),
+      getAll: vi.fn(() => ({ features: [] })),
     })),
   };
 });

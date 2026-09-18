@@ -23,20 +23,21 @@ export const Sidebar: React.FC = () => {
     setSelectedProjectId,
     selectedSiteId,
     setSelectedSiteId,
-    setIsDrawing,
+    startDrawing,
   } = useMapStore();
 
   const { data: projectList = [] } = useProjects();
   const { data: currentProject } = useProject(selectedProjectId);
   const { data: siteData } = useSites(selectedProjectId);
 
-  // Fallback to mock data if API is loading or empty
-  const activeProjects = projectList.length > 0 ? projectList : MOCK_PROJECTS;
-  const activeSites = siteData?.features?.length
-    ? siteData.features
-    : selectedProjectId
-      ? MOCK_SITE_FEATURES.features.filter((f) => f.properties.project_id === selectedProjectId)
-      : MOCK_SITE_FEATURES.features;
+  // Prefer database records over mock data
+  const activeProjects = projectList && projectList.length > 0 ? projectList : MOCK_PROJECTS;
+  const activeSites =
+    siteData?.features !== undefined
+      ? siteData.features
+      : selectedProjectId
+        ? MOCK_SITE_FEATURES.features.filter((f) => f.properties.project_id === selectedProjectId)
+        : MOCK_SITE_FEATURES.features;
 
   const currentSelectedProject =
     activeProjects.find((p) => p.id === selectedProjectId) ||
@@ -45,7 +46,7 @@ export const Sidebar: React.FC = () => {
   return (
     <aside
       aria-label="Project and Site Navigation"
-      className={`fixed top-16 left-0 bottom-0 z-20 bg-earth-dark/95 border-r border-earth-border backdrop-blur-md transition-all duration-300 flex flex-col ${
+      className={`relative z-20 h-full bg-earth-dark/95 border-r border-earth-border backdrop-blur-md transition-all duration-300 flex flex-col shrink-0 ${
         isCollapsed ? 'w-14' : 'w-80 sm:w-96'
       }`}
     >
@@ -74,7 +75,7 @@ export const Sidebar: React.FC = () => {
           <button
             onClick={() => {
               setIsCollapsed(false);
-              setIsDrawing(true);
+              startDrawing();
             }}
             title="Draw Site"
             className="p-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white shadow-md transition"
@@ -134,7 +135,7 @@ export const Sidebar: React.FC = () => {
               {/* Draw Action Button */}
               <button
                 onClick={() => {
-                  setIsDrawing(true);
+                  startDrawing();
                 }}
                 className="w-full mt-3 flex items-center justify-center space-x-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold py-2 px-3 rounded-lg shadow transition"
               >

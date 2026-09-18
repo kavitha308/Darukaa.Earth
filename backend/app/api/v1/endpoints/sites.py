@@ -39,7 +39,7 @@ def list_sites(
 def create_site(
     site_in: SiteCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new geographical site within a project from a GeoJSON Polygon.

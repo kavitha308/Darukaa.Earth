@@ -34,6 +34,6 @@ describe('Darukaa.Earth Smoke Tests', () => {
     expect(drawBtn).toBeInTheDocument();
 
     fireEvent.click(drawBtn);
-    expect(screen.getByText(/Click to finish polygon/i)).toBeInTheDocument();
+    expect(screen.getByText(/Click on the map to add boundary points/i)).toBeInTheDocument();
   });
 });

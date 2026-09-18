@@ -1,17 +1,28 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import mapboxgl from 'mapbox-gl';
 import MapboxDraw from '@mapbox/mapbox-gl-draw';
-import { Compass, ZoomIn, ZoomOut, PenTool, Check, RotateCcw, AlertTriangle } from 'lucide-react';
+import {
+  Compass,
+  ZoomIn,
+  ZoomOut,
+  PenTool,
+  Check,
+  RotateCcw,
+  AlertTriangle,
+  Save,
+  Trash2,
+  Edit3,
+} from 'lucide-react';
 import { useMapStore } from '../../context/mapStore';
 import { useSites } from '../../hooks/useSites';
 import { MOCK_SITE_FEATURES } from '../../services/mockData';
 import { SiteFeature } from '../../types';
 
-// Area calculation on client side for immediate feedback during drawing
+// Area calculation using spherical excess (Gauss-Bonnet) for geodetic accuracy
 function computeClientHectares(coords: number[][]): number {
-  if (coords.length < 4) return 0;
+  if (!coords || coords.length < 4) return 0;
   let total = 0;
-  const radius = 6371008.8;
+  const radius = 6371008.8; // Earth authalic mean radius in meters
   for (let i = 0; i < coords.length - 1; i++) {
     const p1 = coords[i];
     const p2 = coords[i + 1];
@@ -31,7 +42,6 @@ const BASEMAP_STYLES = {
   outdoors: 'mapbox://styles/mapbox/outdoors-v12',
 };
 
-// OpenStreetMap fallback style if no Mapbox token is supplied
 const OSM_FALLBACK_STYLE: mapboxgl.Style = {
   version: 8,
   sources: {
@@ -56,6 +66,94 @@ const OSM_FALLBACK_STYLE: mapboxgl.Style = {
   ],
 };
 
+// Complete MapboxDraw stylesheet supporting LineString and Polygon drawing states
+const MAPBOX_DRAW_THEME = [
+  // 1. Polygon Fill
+  {
+    id: 'gl-draw-polygon-fill',
+    type: 'fill',
+    filter: ['all', ['==', '$type', 'Polygon']],
+    paint: {
+      'fill-color': ['case', ['==', ['get', 'active'], 'true'], '#4ade80', '#22c55e'],
+      'fill-opacity': 0.35,
+    },
+  },
+  // 2. Lines: matches LineStrings AND in-progress Polygon boundary lines
+  {
+    id: 'gl-draw-lines',
+    type: 'line',
+    filter: ['any', ['==', '$type', 'LineString'], ['==', '$type', 'Polygon']],
+    layout: {
+      'line-cap': 'round',
+      'line-join': 'round',
+    },
+    paint: {
+      'line-color': ['case', ['==', ['get', 'active'], 'true'], '#4ade80', '#22c55e'],
+      'line-width': 3,
+    },
+  },
+  // 3. Points (Feature outer halo)
+  {
+    id: 'gl-draw-point-outer',
+    type: 'circle',
+    filter: ['all', ['==', '$type', 'Point'], ['==', 'meta', 'feature']],
+    paint: {
+      'circle-radius': 8,
+      'circle-color': '#ffffff',
+    },
+  },
+  // 4. Points (Feature inner fill)
+  {
+    id: 'gl-draw-point-inner',
+    type: 'circle',
+    filter: ['all', ['==', '$type', 'Point'], ['==', 'meta', 'feature']],
+    paint: {
+      'circle-radius': 6,
+      'circle-color': '#16a34a',
+    },
+  },
+  // 5. Vertices during drawing and direct_select (outer halo)
+  {
+    id: 'gl-draw-vertex-outer',
+    type: 'circle',
+    filter: [
+      'all',
+      ['==', '$type', 'Point'],
+      ['==', 'meta', 'vertex'],
+      ['!=', 'mode', 'simple_select'],
+    ],
+    paint: {
+      'circle-radius': 8,
+      'circle-color': '#ffffff',
+    },
+  },
+  // 6. Vertices during drawing and direct_select (inner circle)
+  {
+    id: 'gl-draw-vertex-inner',
+    type: 'circle',
+    filter: [
+      'all',
+      ['==', '$type', 'Point'],
+      ['==', 'meta', 'vertex'],
+      ['!=', 'mode', 'simple_select'],
+    ],
+    paint: {
+      'circle-radius': 6,
+      'circle-color': ['case', ['==', ['get', 'active'], 'true'], '#4ade80', '#16a34a'],
+    },
+  },
+  // 7. Midpoints for dragging new vertices
+  {
+    id: 'gl-draw-midpoint',
+    type: 'circle',
+    filter: ['all', ['==', 'meta', 'midpoint']],
+    paint: {
+      'circle-radius': 5,
+      'circle-color': '#fde047',
+    },
+  },
+];
+
 export const MapView: React.FC = () => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -70,17 +168,26 @@ export const MapView: React.FC = () => {
     setActiveBasemap,
     isDrawing,
     setIsDrawing,
+    drawTrigger,
+    startDrawing,
+    drawnCoordinates,
+    drawnAreaHectares,
     setDrawnPolygon,
     clearDrawnPolygon,
+    setIsCreateSiteModalOpen,
   } = useMapStore();
 
   const { data: siteData } = useSites(selectedProjectId);
   const [tokenMissing, setTokenMissing] = useState(false);
+  const [currentFeatureId, setCurrentFeatureId] = useState<string | null>(null);
 
-  // Fallback to mock data if API is loading or empty
-  const activeFeatures = siteData?.features?.length
-    ? siteData.features
-    : MOCK_SITE_FEATURES.features;
+  // Synchronize state into refs for access in event listeners
+  const isDrawingRef = useRef(isDrawing);
+  isDrawingRef.current = isDrawing;
+
+  // Prefer database records if query has settled; fall back to mock data if empty
+  const activeFeatures =
+    siteData?.features !== undefined ? siteData.features : MOCK_SITE_FEATURES.features;
   const activeFeaturesRef = useRef(activeFeatures);
   activeFeaturesRef.current = activeFeatures;
 
@@ -113,7 +220,7 @@ export const MapView: React.FC = () => {
               '#06b6d4',
               ['==', ['get', 'biome'], 'Temperate Peatland'],
               '#eab308',
-              '#22c55e', // Tropical Rainforest
+              '#22c55e', // Tropical Rainforest default
             ],
             'fill-opacity': 0.35,
           },
@@ -138,8 +245,9 @@ export const MapView: React.FC = () => {
           },
         });
 
-        // Hover and Click Handlers
+        // Hover popup handler
         map.on('mouseenter', 'sites-fill', (e) => {
+          if (isDrawingRef.current) return;
           map.getCanvas().style.cursor = 'pointer';
           if (e.features && e.features[0]) {
             const props = e.features[0].properties;
@@ -164,7 +272,9 @@ export const MapView: React.FC = () => {
           if (popupRef.current) popupRef.current.remove();
         });
 
+        // Click handler: do not trigger if user is actively drawing
         map.on('click', 'sites-fill', (e) => {
+          if (isDrawingRef.current) return;
           if (e.features && e.features[0]) {
             const props = e.features[0].properties;
             if (props?.id) {
@@ -184,7 +294,7 @@ export const MapView: React.FC = () => {
     [setSelectedSiteId]
   );
 
-  // Initialize Mapbox map
+  // Initialize Mapbox map strictly ONCE on mount
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
@@ -195,11 +305,11 @@ export const MapView: React.FC = () => {
       mapboxgl.accessToken = token;
     }
 
-    const mapStyle = token ? BASEMAP_STYLES[activeBasemap] : (OSM_FALLBACK_STYLE as any);
+    const initialStyle = token ? BASEMAP_STYLES.satellite : (OSM_FALLBACK_STYLE as any);
 
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
-      style: mapStyle,
+      style: initialStyle,
       center: [20, 15],
       zoom: 2.2,
       attributionControl: true,
@@ -207,56 +317,17 @@ export const MapView: React.FC = () => {
 
     mapRef.current = map;
 
-    // Initialize Mapbox Draw plugin
+    // Initialize Mapbox Draw with complete stylesheet supporting LineString and Polygon
     const draw = new MapboxDraw({
       displayControlsDefault: false,
-      controls: {
-        polygon: true,
-        trash: true,
-      },
+      controls: {},
       defaultMode: 'simple_select',
-      styles: [
-        {
-          id: 'gl-draw-polygon-fill',
-          type: 'fill',
-          filter: ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
-          paint: {
-            'fill-color': '#22c55e',
-            'fill-outline-color': '#4ade80',
-            'fill-opacity': 0.35,
-          },
-        },
-        {
-          id: 'gl-draw-polygon-stroke',
-          type: 'line',
-          filter: ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
-          layout: {
-            'line-cap': 'round',
-            'line-join': 'round',
-          },
-          paint: {
-            'line-color': '#4ade80',
-            'line-width': 2.5,
-          },
-        },
-        {
-          id: 'gl-draw-point-stroke',
-          type: 'circle',
-          filter: ['all', ['==', '$type', 'Point'], ['==', 'meta', 'vertex']],
-          paint: {
-            'circle-radius': 5,
-            'circle-color': '#ffffff',
-            'circle-stroke-width': 2,
-            'circle-stroke-color': '#16a34a',
-          },
-        },
-      ],
+      styles: MAPBOX_DRAW_THEME,
     });
 
     drawRef.current = draw;
-    map.addControl(draw as any, 'top-left');
+    map.addControl(draw as any);
 
-    // Create Popup
     popupRef.current = new mapboxgl.Popup({
       closeButton: false,
       closeOnClick: false,
@@ -265,27 +336,59 @@ export const MapView: React.FC = () => {
 
     // Handle Draw Events
     const handleDrawCreate = (e: any) => {
-      const feature = e.features[0];
+      const feature = e.features?.[0];
       if (feature && feature.geometry.type === 'Polygon') {
         const ring = feature.geometry.coordinates[0];
         const areaHa = computeClientHectares(ring);
+        setCurrentFeatureId(feature.id);
         setDrawnPolygon(feature.geometry.coordinates, areaHa);
         setIsDrawing(false);
       }
     };
 
+    const handleDrawUpdate = (e: any) => {
+      const feature = e.features?.[0];
+      if (feature && feature.geometry.type === 'Polygon') {
+        const ring = feature.geometry.coordinates[0];
+        const areaHa = computeClientHectares(ring);
+        setCurrentFeatureId(feature.id);
+        setDrawnPolygon(feature.geometry.coordinates, areaHa);
+      }
+    };
+
+    const handleDrawDelete = () => {
+      setCurrentFeatureId(null);
+      clearDrawnPolygon();
+      setIsDrawing(false);
+    };
+
     map.on('draw.create', handleDrawCreate);
+    map.on('draw.update', handleDrawUpdate);
+    map.on('draw.delete', handleDrawDelete);
 
     map.on('load', () => {
       renderSiteLayers(map, activeFeaturesRef.current);
+      map.resize();
     });
 
     return () => {
       map.remove();
+      mapRef.current = null;
+      drawRef.current = null;
     };
-  }, [activeBasemap, renderSiteLayers, setDrawnPolygon, setIsDrawing]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Update Basemap Style
+  // Window resize handler
+  useEffect(() => {
+    const handleResize = () => {
+      mapRef.current?.resize();
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Update Basemap Style dynamically without destroying map instance
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -294,9 +397,9 @@ export const MapView: React.FC = () => {
 
     map.setStyle(BASEMAP_STYLES[activeBasemap]);
     map.once('style.load', () => {
-      renderSiteLayers(map, activeFeatures);
+      renderSiteLayers(map, activeFeaturesRef.current);
     });
-  }, [activeBasemap, activeFeatures, renderSiteLayers]);
+  }, [activeBasemap, renderSiteLayers]);
 
   // Update GeoJSON source when features change
   useEffect(() => {
@@ -305,18 +408,44 @@ export const MapView: React.FC = () => {
     renderSiteLayers(map, activeFeatures);
   }, [activeFeatures, renderSiteLayers]);
 
-  // Handle Draw Toggle
-  const toggleDrawMode = () => {
-    if (!drawRef.current) return;
+  // Synchronize draw tool mode whenever startDrawing is called or drawTrigger changes
+  useEffect(() => {
+    const draw = drawRef.current;
+    if (!draw) return;
+
     if (isDrawing) {
-      drawRef.current.changeMode('simple_select');
-      setIsDrawing(false);
-      clearDrawnPolygon();
-    } else {
-      drawRef.current.deleteAll();
-      drawRef.current.changeMode('draw_polygon');
-      setIsDrawing(true);
+      draw.deleteAll();
+      draw.changeMode('draw_polygon');
     }
+  }, [isDrawing, drawTrigger]);
+
+  // If drawn polygon was cleared (e.g. from modal cancel or saved), clear Draw layer
+  useEffect(() => {
+    if (!drawnCoordinates && drawRef.current) {
+      const features = drawRef.current.getAll().features;
+      if (features.length > 0) {
+        drawRef.current.deleteAll();
+        drawRef.current.changeMode('simple_select');
+      }
+      setCurrentFeatureId(null);
+    }
+  }, [drawnCoordinates]);
+
+  // Cancel Drawing action
+  const handleCancelDraw = () => {
+    if (drawRef.current) {
+      drawRef.current.deleteAll();
+      drawRef.current.changeMode('simple_select');
+    }
+    clearDrawnPolygon();
+    setCurrentFeatureId(null);
+    setIsDrawing(false);
+  };
+
+  // Edit vertices action
+  const handleEditVertices = () => {
+    if (!drawRef.current || !currentFeatureId) return;
+    drawRef.current.changeMode('direct_select', { featureId: currentFeatureId });
   };
 
   // Fly to site when selectedSiteId changes
@@ -348,35 +477,75 @@ export const MapView: React.FC = () => {
         </div>
       )}
 
-      {/* Drawing Toolbar Overlay */}
-      <div className="absolute top-4 left-4 z-20 flex items-center space-x-2 bg-earth-card/95 border border-earth-border p-1.5 rounded-xl shadow-xl backdrop-blur">
-        <button
-          onClick={toggleDrawMode}
-          className={`flex items-center space-x-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition ${
-            isDrawing
-              ? 'bg-amber-600 text-white animate-pulse'
-              : 'bg-brand-600 hover:bg-brand-500 text-white shadow-md shadow-brand-950'
-          }`}
-        >
-          <PenTool className="w-3.5 h-3.5" />
-          <span>{isDrawing ? 'Click to finish polygon' : 'Draw New Site Polygon'}</span>
-        </button>
+      {/* Interactive GIS Drawing Action Toolbar */}
+      <div className="absolute top-4 left-4 z-20 flex items-center space-x-2 bg-earth-card/95 border border-earth-border p-2 rounded-xl shadow-2xl backdrop-blur-md">
+        {!isDrawing && !drawnCoordinates && (
+          <button
+            onClick={startDrawing}
+            className="flex items-center space-x-2 px-4 py-2 rounded-lg text-xs font-bold bg-brand-600 hover:bg-brand-500 text-white shadow-md shadow-brand-950 transition hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <PenTool className="w-4 h-4" />
+            <span>Draw New Site Polygon</span>
+          </button>
+        )}
 
         {isDrawing && (
-          <button
-            onClick={() => {
-              if (drawRef.current) {
-                drawRef.current.deleteAll();
-                drawRef.current.changeMode('simple_select');
-              }
-              setIsDrawing(false);
-              clearDrawnPolygon();
-            }}
-            className="p-2 rounded-lg bg-earth-dark hover:bg-earth-border text-slate-400 hover:text-white transition"
-            title="Cancel Draw"
-          >
-            <RotateCcw className="w-4 h-4" />
-          </button>
+          <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-2 text-xs font-semibold text-emerald-300 bg-emerald-950/80 px-3 py-1.5 rounded-lg border border-emerald-700/60 shadow animate-pulse">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+              <span>
+                Click on the map to add boundary points. Click first point to close polygon.
+              </span>
+            </div>
+
+            <button
+              onClick={handleCancelDraw}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-earth-dark hover:bg-red-950/60 border border-earth-border hover:border-red-700 text-slate-300 hover:text-red-300 text-xs font-semibold transition"
+              title="Cancel drawing session"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Cancel</span>
+            </button>
+          </div>
+        )}
+
+        {!isDrawing && drawnCoordinates && (
+          <div className="flex items-center space-x-2.5">
+            {/* Area Calculated Badge */}
+            <div className="flex items-center space-x-2 bg-brand-950/90 border border-brand-700/70 px-3.5 py-1.5 rounded-lg text-xs text-brand-300 font-bold">
+              <Check className="w-4 h-4 text-brand-400" />
+              <span>Polygon Area: {drawnAreaHectares?.toLocaleString() || '0'} ha</span>
+            </div>
+
+            {/* Edit Vertices Button */}
+            <button
+              onClick={handleEditVertices}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-earth-dark hover:bg-earth-border border border-earth-border text-slate-300 hover:text-white text-xs font-medium transition"
+              title="Click and drag polygon vertices"
+            >
+              <Edit3 className="w-3.5 h-3.5 text-blue-400" />
+              <span>Edit Vertices</span>
+            </button>
+
+            {/* Redraw / Discard */}
+            <button
+              onClick={handleCancelDraw}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-earth-dark hover:bg-red-950/60 border border-earth-border hover:border-red-700 text-slate-300 hover:text-red-300 text-xs font-medium transition"
+              title="Discard and redraw"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Discard</span>
+            </button>
+
+            {/* Primary Save Site CTA */}
+            <button
+              onClick={() => setIsCreateSiteModalOpen(true)}
+              className="flex items-center space-x-1.5 px-4 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold shadow-lg shadow-brand-950 transition hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <Save className="w-4 h-4" />
+              <span>Save Site Details →</span>
+            </button>
+          </div>
         )}
       </div>
 

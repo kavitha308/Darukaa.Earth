@@ -5,7 +5,8 @@ interface MapState {
   selectedSiteId: string | null;
   activeBasemap: 'satellite' | 'dark' | 'outdoors';
   isDrawing: boolean;
-  drawnCoordinates: number[][] | null;
+  drawTrigger: number;
+  drawnCoordinates: number[][][] | null;
   drawnAreaHectares: number | null;
   isSiteDetailDrawerOpen: boolean;
   isCreateSiteModalOpen: boolean;
@@ -17,7 +18,8 @@ interface MapState {
   setSelectedSiteId: (id: string | null) => void;
   setActiveBasemap: (style: 'satellite' | 'dark' | 'outdoors') => void;
   setIsDrawing: (drawing: boolean) => void;
-  setDrawnPolygon: (coords: number[][] | null, areaHa: number | null) => void;
+  startDrawing: () => void;
+  setDrawnPolygon: (coords: number[][][] | null, areaHa: number | null) => void;
   clearDrawnPolygon: () => void;
   setIsSiteDetailDrawerOpen: (open: boolean) => void;
   setIsCreateSiteModalOpen: (open: boolean) => void;
@@ -30,6 +32,7 @@ export const useMapStore = create<MapState>((set) => ({
   selectedSiteId: null,
   activeBasemap: 'satellite',
   isDrawing: false,
+  drawTrigger: 0,
   drawnCoordinates: null,
   drawnAreaHectares: null,
   isSiteDetailDrawerOpen: false,
@@ -46,11 +49,18 @@ export const useMapStore = create<MapState>((set) => ({
     }),
   setActiveBasemap: (basemap) => set({ activeBasemap: basemap }),
   setIsDrawing: (drawing) => set({ isDrawing: drawing }),
+  startDrawing: () =>
+    set((state) => ({
+      isDrawing: true,
+      drawTrigger: state.drawTrigger + 1,
+      drawnCoordinates: null,
+      drawnAreaHectares: null,
+      isCreateSiteModalOpen: false,
+    })),
   setDrawnPolygon: (coords, areaHa) =>
     set({
       drawnCoordinates: coords,
       drawnAreaHectares: areaHa,
-      isCreateSiteModalOpen: !!coords,
     }),
   clearDrawnPolygon: () =>
     set({

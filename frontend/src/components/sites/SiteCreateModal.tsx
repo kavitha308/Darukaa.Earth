@@ -16,9 +16,12 @@ const BIOMES = [
 export const SiteCreateModal: React.FC = () => {
   const {
     selectedProjectId,
+    setSelectedProjectId,
+    setSelectedSiteId,
     drawnCoordinates,
     drawnAreaHectares,
     isCreateSiteModalOpen,
+    setIsCreateSiteModalOpen,
     clearDrawnPolygon,
   } = useMapStore();
 
@@ -60,7 +63,7 @@ export const SiteCreateModal: React.FC = () => {
     }
 
     try {
-      await createSiteMutation.mutateAsync({
+      const newSite = await createSiteMutation.mutateAsync({
         project_id: projectId,
         name: name.trim(),
         description: description.trim() || undefined,
@@ -72,8 +75,13 @@ export const SiteCreateModal: React.FC = () => {
       });
 
       clearDrawnPolygon();
+      setIsCreateSiteModalOpen(false);
       setName('');
       setDescription('');
+      setSelectedProjectId(projectId);
+      if (newSite?.id) {
+        setSelectedSiteId(newSite.id);
+      }
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Failed to create site.');
     }
@@ -82,7 +90,7 @@ export const SiteCreateModal: React.FC = () => {
   return (
     <Modal
       isOpen={isCreateSiteModalOpen}
-      onClose={clearDrawnPolygon}
+      onClose={() => setIsCreateSiteModalOpen(false)}
       title="Register New Geographical Site"
       subtitle="Confirm polygon geometry and configure ecological parameters"
     >
@@ -175,7 +183,7 @@ export const SiteCreateModal: React.FC = () => {
         <div className="flex items-center justify-end space-x-3 pt-2">
           <button
             type="button"
-            onClick={clearDrawnPolygon}
+            onClick={() => setIsCreateSiteModalOpen(false)}
             className="px-4 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-earth-border/40 transition"
           >
             Cancel
