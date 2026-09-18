@@ -2,30 +2,39 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from app.core.database import Base, get_db
+from app.core.database import Base, engine, get_db, is_sqlite
 from app.main import app
 
-# Set test environment SQLite database
-TEST_DB_FILE = "./test_darukaa.db"
-TEST_DATABASE_URL = f"sqlite:///{TEST_DB_FILE}"
+# For SQLite, use a dedicated test database; for PostgreSQL, use the configured engine
+if is_sqlite:
+    TEST_DB_FILE = "./test_darukaa.db"
+    TEST_DATABASE_URL = f"sqlite:///{TEST_DB_FILE}"
+    test_engine = create_engine(
+        TEST_DATABASE_URL,
+        connect_args={"check_same_thread": False},
+    )
+else:
+    TEST_DB_FILE = None
+    test_engine = engine
 
-test_engine = create_engine(
-    TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_db():
+    if not is_sqlite:
+        with test_engine.connect() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis;"))
+            conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'))
+            conn.commit()
     Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
     yield
     Base.metadata.drop_all(bind=test_engine)
-    if os.path.exists(TEST_DB_FILE):
+    if is_sqlite and TEST_DB_FILE and os.path.exists(TEST_DB_FILE):
         try:
             os.remove(TEST_DB_FILE)
         except Exception:
@@ -36,12 +45,16 @@ def setup_test_db():
 def db_session():
     connection = test_engine.connect()
     transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
+    session = TestingSessionLocal(
+        bind=connection,
+        join_transaction_mode="create_savepoint",
+    )
 
     yield session
 
     session.close()
-    transaction.rollback()
+    if transaction.is_active:
+        transaction.rollback()
     connection.close()
 
 
