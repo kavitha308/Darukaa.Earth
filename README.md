@@ -26,7 +26,7 @@ A production-grade, full-stack geospatial data analytics platform engineered for
 
 ## 1. Live Demo & Quick Links
 
-- **Live Application Demo**: [https://darukaa-earth.onrender.com](https://darukaa-earth.onrender.com) (or local `http://localhost:5173`)
+- **Live Application Demo**: [https://darukaa-earth-ec09.onrender.com](https://darukaa-earth-ec09.onrender.com) (or local `http://localhost:5173`)
 - **Backend API OpenAPI Docs**: [https://darukaa-earth-backend.onrender.com/docs](https://darukaa-earth-backend.onrender.com/docs)
 - **Word Document Submission**: [`Darukaa_Earth_Submission.docx`](./Darukaa_Earth_Submission.docx)
 - **Pre-Configured Admin Credentials**:
