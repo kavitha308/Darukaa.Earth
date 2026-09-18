@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/.venv/
+.venv/
+env/
+venv/
+ENV/
+*.db
+*.sqlite3
+test_darukaa.db
+darukaa_earth.db
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.vite/
+frontend/.vite/
+*.local
+.DS_Store
+Thumbs.db
+
+# Environments
+.env
+backend/.env
+frontend/.env
+!*.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
